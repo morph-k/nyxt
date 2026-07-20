@@ -115,6 +115,59 @@ it must be the `-dev` package: CFFI asks for the unversioned
 
 ## Running it
 
-The binary is Linux and is linked against a `/nix/store` glibc, so it runs
-inside the container, not on the host. Displaying its GUI from macOS needs
-XQuartz and X11 forwarding.
+Building and running are separate problems. `./nyxt --version` succeeds long
+before the browser can actually launch, because it never starts Electron — so
+a green build says nothing about whether the GUI works.
+
+### On NixOS: nix-ld is required
+
+npm ships Electron as a **generic-Linux prebuilt**, whose ELF interpreter is
+`/lib/ld-linux-aarch64.so.1`. NixOS has no such loader, so launching fails
+with:
+
+```
+Could not start dynamically linked executable: .../electron/dist/electron
+NixOS cannot run dynamically linked executables intended for generic
+linux environments out of the box.
+```
+
+`programs.nix-ld` supplies a loader and a library path. Chromium's set is
+large; note that `libgbm.so.1` is **not** in `mesa` any more and must be listed
+separately as `libgbm`, or you get
+`libgbm.so.1: cannot open shared object file`.
+
+A working configuration is in
+[morph-k/nix](https://github.com/morph-k/nix/blob/main/modules/utm-builder.nix).
+
+### Displaying it from macOS
+
+No XQuartz needed. Run a headless X server in the guest and view it over VNC
+through an SSH tunnel:
+
+```bash
+# in the guest
+Xvfb :99 -screen 0 1600x1000x24 &
+x11vnc -display :99 -rfbport 5999 -localhost -forever -nopw &
+DISPLAY=:99 ./nyxt --electron-opts='--no-sandbox --disable-gpu --disable-dev-shm-usage'
+
+# on macOS
+ssh -N -L 5999:127.0.0.1:5999 user@guest
+open vnc://127.0.0.1:5999
+```
+
+Note the `=` in `--electron-opts=...`. Nyxt's option parser reads a
+space-separated value beginning with `--` as the *next* flag, so
+`--electron-opts '--no-sandbox …'` fails with `missing arg for option`.
+
+`--disable-gpu` is what silences
+`ANGLE Display::initialize error 12289: GLX is not present`. Chromium
+software-renders fine on a headless aarch64 guest. Keep `-localhost` and tunnel
+over SSH rather than exposing the VNC port.
+
+If a relaunch produces no window while logging *"Nyxt started, opening new
+window"*, an earlier instance still holds `/run/user/$UID/nyxt/nyxt.socket` and
+the new process delegated to it and exited. The tell is a missing "Listening to
+socket" line. Kill the old process and remove the socket directory.
+
+Verified end to end this way: Nyxt 4 rendering under Xvfb on aarch64 NixOS,
+viewed from macOS, no XQuartz involved.
