@@ -1,0 +1,6 @@
+# The build context only needs the flake files; _build carries the vendored
+# Lisp submodules plus Electron's node_modules (hundreds of MB) and is
+# bind-mounted at run time rather than copied.
+_build/
+.git/
+nyxt
